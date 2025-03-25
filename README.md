@@ -45,7 +45,7 @@ A simple Doodle Jump style game written in Go using the Ebitengine game library.
 go build
 
 # Run the game
-./doodlejump
+./
 ```
 
 ## Requirements

@@ -16,27 +16,27 @@ import (
 )
 
 const (
-	ScreenWidth     = 320
-	ScreenHeight    = 480
-	PlatformWidth   = 60
-	PlatformHeight  = 10
-	PlayerWidth     = 40
-	PlayerHeight    = 40
-	BirdWidth       = 40
-	BirdHeight      = 30
-	CloudWidth      = 80
-	CloudHeight     = 40
-	Gravity         = 0.2
-	JumpVelocity    = -8
-	PlatformCount   = 10
-	BirdCount       = 3
-	CloudCount      = 5
-	SnowflakeCount  = 40
-	RaindropCount   = 50
-	BirdSpeedMin    = 1
-	BirdSpeedMax    = 3
-	CloudSpeedMin   = 0.2
-	CloudSpeedMax   = 1.0
+	ScreenWidth    = 320
+	ScreenHeight   = 480
+	PlatformWidth  = 60
+	PlatformHeight = 10
+	PlayerWidth    = 40
+	PlayerHeight   = 40
+	BirdWidth      = 40
+	BirdHeight     = 30
+	CloudWidth     = 80
+	CloudHeight    = 40
+	Gravity        = 0.2
+	JumpVelocity   = -8
+	PlatformCount  = 10
+	BirdCount      = 3
+	CloudCount     = 5
+	SnowflakeCount = 40
+	RaindropCount  = 50
+	BirdSpeedMin   = 1
+	BirdSpeedMax   = 3
+	CloudSpeedMin  = 0.2
+	CloudSpeedMax  = 1.0
 )
 
 // Weather types
@@ -56,27 +56,27 @@ type Platform struct {
 
 // Bird represents a bird obstacle
 type Bird struct {
-	X, Y        float64
-	SpeedX      float64
-	Direction   int // 1 for right, -1 for left
+	X, Y      float64
+	SpeedX    float64
+	Direction int // 1 for right, -1 for left
 }
 
 // Cloud represents a background cloud
 type Cloud struct {
-	X, Y    float64
-	SpeedX  float64
-	Width   float64
-	Height  float64
-	Alpha   float64    // transparency
+	X, Y   float64
+	SpeedX float64
+	Width  float64
+	Height float64
+	Alpha  float64 // transparency
 }
 
 // Weather particle (rain or snow)
 type Particle struct {
-	X, Y      float64
-	SpeedX    float64
-	SpeedY    float64
-	Size      float64
-	Alpha     float64
+	X, Y   float64
+	SpeedX float64
+	SpeedY float64
+	Size   float64
+	Alpha  float64
 }
 
 // Player represents the player character
@@ -88,24 +88,24 @@ type Player struct {
 
 // Game implements ebiten.Game interface
 type Game struct {
-	player         Player
-	platforms      []Platform
-	birds          []Bird
-	clouds         []Cloud
-	particles      []Particle
-	camera         float64
-	score          int
-	playerImg      *ebiten.Image
-	platformImg    *ebiten.Image
-	birdLeftImg    *ebiten.Image
-	birdRightImg   *ebiten.Image
-	cloudImg       *ebiten.Image
-	gameOver       bool
-	nightMode      bool
-	weather        int
-	startTime      time.Time
-	cycleTime      time.Duration
-	weatherTimer   float64    // counter for weather changes
+	player       Player
+	platforms    []Platform
+	birds        []Bird
+	clouds       []Cloud
+	particles    []Particle
+	camera       float64
+	score        int
+	playerImg    *ebiten.Image
+	platformImg  *ebiten.Image
+	birdLeftImg  *ebiten.Image
+	birdRightImg *ebiten.Image
+	cloudImg     *ebiten.Image
+	gameOver     bool
+	nightMode    bool
+	weather      int
+	startTime    time.Time
+	cycleTime    time.Duration
+	weatherTimer float64 // counter for weather changes
 }
 
 // loadImage loads an image from file path
@@ -127,31 +127,31 @@ func loadImage(path string) *ebiten.Image {
 // NewGame creates a new game instance
 func NewGame() *Game {
 	// We don't need to seed in newer Go versions
-	
+
 	g := &Game{
 		player: Player{
-			X: ScreenWidth / 2,
-			Y: ScreenHeight - 100,
+			X:           ScreenWidth / 2,
+			Y:           ScreenHeight - 100,
 			FacingRight: true,
 		},
-		platforms: make([]Platform, PlatformCount),
-		birds: make([]Bird, BirdCount),
-		clouds: make([]Cloud, CloudCount),
-		particles: make([]Particle, 0, RaindropCount),
-		gameOver: false,
-		startTime: time.Now(),
-		cycleTime: time.Minute * 2, // Day/night cycle every 2 minutes
+		platforms:    make([]Platform, PlatformCount),
+		birds:        make([]Bird, BirdCount),
+		clouds:       make([]Cloud, CloudCount),
+		particles:    make([]Particle, 0, RaindropCount),
+		gameOver:     false,
+		startTime:    time.Now(),
+		cycleTime:    time.Minute * 2,     // Day/night cycle every 2 minutes
 		weatherTimer: rand.Float64() * 15, // Random time until weather changes
-		weather: WeatherClear,
+		weather:      WeatherClear,
 	}
 
 	// Load images
-	g.playerImg = loadImage("/Users/macbookpro/IdeaProjects/test-claude/doodlejump/assets/player.png")
-	g.platformImg = loadImage("/Users/macbookpro/IdeaProjects/test-claude/doodlejump/assets/platform.png")
-	g.birdLeftImg = loadImage("/Users/macbookpro/IdeaProjects/test-claude/doodlejump/assets/bird_left.png")
-	g.birdRightImg = loadImage("/Users/macbookpro/IdeaProjects/test-claude/doodlejump/assets/bird_right.png")
-	g.cloudImg = loadImage("/Users/macbookpro/IdeaProjects/test-claude/doodlejump/assets/cloud.png")
-	
+	g.playerImg = loadImage("./assets/player.png")
+	g.platformImg = loadImage("./assets/platform.png")
+	g.birdLeftImg = loadImage("./assets/bird_left.png")
+	g.birdRightImg = loadImage("./assets/bird_right.png")
+	g.cloudImg = loadImage("./assets/cloud.png")
+
 	// Set night mode initially based on system time
 	hour := time.Now().Hour()
 	g.nightMode = hour < 6 || hour > 18
@@ -176,24 +176,24 @@ func NewGame() *Game {
 		if rand.Float64() < 0.5 {
 			direction = -1
 		}
-		
+
 		g.birds[i] = Bird{
-			X: rand.Float64() * ScreenWidth,
-			Y: rand.Float64() * ScreenHeight / 2, // Birds in upper half
-			SpeedX: BirdSpeedMin + rand.Float64()*(BirdSpeedMax-BirdSpeedMin),
+			X:         rand.Float64() * ScreenWidth,
+			Y:         rand.Float64() * ScreenHeight / 2, // Birds in upper half
+			SpeedX:    BirdSpeedMin + rand.Float64()*(BirdSpeedMax-BirdSpeedMin),
 			Direction: direction,
 		}
 	}
-	
+
 	// Initialize clouds
 	for i := 0; i < CloudCount; i++ {
 		g.clouds[i] = Cloud{
-			X: rand.Float64() * ScreenWidth,
-			Y: rand.Float64() * ScreenHeight * 0.7, // Clouds in top 70% of screen
+			X:      rand.Float64() * ScreenWidth,
+			Y:      rand.Float64() * ScreenHeight * 0.7, // Clouds in top 70% of screen
 			SpeedX: CloudSpeedMin + rand.Float64()*(CloudSpeedMax-CloudSpeedMin),
-			Width: CloudWidth * (0.7 + rand.Float64() * 0.6), // Random size variation
-			Height: CloudHeight * (0.7 + rand.Float64() * 0.6),
-			Alpha: 0.5 + rand.Float64() * 0.5, // Random transparency
+			Width:  CloudWidth * (0.7 + rand.Float64()*0.6), // Random size variation
+			Height: CloudHeight * (0.7 + rand.Float64()*0.6),
+			Alpha:  0.5 + rand.Float64()*0.5, // Random transparency
 		}
 	}
 
@@ -203,29 +203,29 @@ func NewGame() *Game {
 // generateParticle creates a new rain or snow particle
 func (g *Game) generateParticle() Particle {
 	var particle Particle
-	
+
 	if g.weather == WeatherRain {
 		// Raindrop
 		particle = Particle{
-			X: rand.Float64() * ScreenWidth,
-			Y: -5,
-			SpeedX: 1 + rand.Float64()*2,  // slight horizontal movement
-			SpeedY: 8 + rand.Float64()*4,  // fast fall
-			Size: 2 + rand.Float64()*3,
-			Alpha: 0.6 + rand.Float64()*0.4,
+			X:      rand.Float64() * ScreenWidth,
+			Y:      -5,
+			SpeedX: 1 + rand.Float64()*2, // slight horizontal movement
+			SpeedY: 8 + rand.Float64()*4, // fast fall
+			Size:   2 + rand.Float64()*3,
+			Alpha:  0.6 + rand.Float64()*0.4,
 		}
 	} else if g.weather == WeatherSnow {
 		// Snowflake
 		particle = Particle{
-			X: rand.Float64() * ScreenWidth,
-			Y: -5,
+			X:      rand.Float64() * ScreenWidth,
+			Y:      -5,
 			SpeedX: -1 + rand.Float64()*2, // random drift
 			SpeedY: 1 + rand.Float64()*2,  // slow fall
-			Size: 2 + rand.Float64()*4,
-			Alpha: 0.7 + rand.Float64()*0.3,
+			Size:   2 + rand.Float64()*4,
+			Alpha:  0.7 + rand.Float64()*0.3,
 		}
 	}
-	
+
 	return particle
 }
 
@@ -237,12 +237,12 @@ func (g *Game) Update() error {
 		}
 		return nil
 	}
-	
+
 	// Toggle night mode with 'N' key
 	if inpututil.IsKeyJustPressed(ebiten.KeyN) {
 		g.nightMode = !g.nightMode
 	}
-	
+
 	// Toggle weather with 'W' key
 	if inpututil.IsKeyJustPressed(ebiten.KeyW) {
 		g.weather = (g.weather + 1) % 3 // Cycle through weather types
@@ -252,23 +252,23 @@ func (g *Game) Update() error {
 	// Update day/night cycle based on time
 	elapsed := time.Since(g.startTime).Seconds()
 	cycleSeconds := g.cycleTime.Seconds()
-	
+
 	// Auto-toggle night mode based on cycle time
 	if int(elapsed/cycleSeconds)%2 == 1 {
 		g.nightMode = true
 	} else {
 		g.nightMode = false
 	}
-	
+
 	// Weather timer and changes
 	g.weatherTimer -= 0.016 // Assume ~60 FPS
 	if g.weatherTimer <= 0 {
 		// Change weather randomly
 		g.weather = rand.Intn(3)
 		g.weatherTimer = 15 + rand.Float64()*20 // 15-35 seconds until next change
-		g.particles = g.particles[:0] // Clear particles when weather changes
+		g.particles = g.particles[:0]           // Clear particles when weather changes
 	}
-	
+
 	// Generate particles based on weather
 	if g.weather == WeatherRain {
 		// Generate raindrops
@@ -281,12 +281,12 @@ func (g *Game) Update() error {
 			g.particles = append(g.particles, g.generateParticle())
 		}
 	}
-	
+
 	// Update particles
 	for i := 0; i < len(g.particles); i++ {
 		g.particles[i].X += g.particles[i].SpeedX
 		g.particles[i].Y += g.particles[i].SpeedY
-		
+
 		// Remove particles that go off screen
 		if g.particles[i].Y > ScreenHeight {
 			g.particles[i] = g.particles[len(g.particles)-1]
@@ -314,11 +314,11 @@ func (g *Game) Update() error {
 	// Apply gravity
 	g.player.VelocityY += Gravity
 	g.player.Y += g.player.VelocityY
-	
+
 	// Update cloud positions
 	for i := range g.clouds {
 		g.clouds[i].X += g.clouds[i].SpeedX
-		
+
 		// Wrap around screen
 		if g.clouds[i].X > ScreenWidth {
 			g.clouds[i].X = -g.clouds[i].Width
@@ -329,19 +329,19 @@ func (g *Game) Update() error {
 	for i := range g.birds {
 		b := &g.birds[i]
 		b.X += b.SpeedX * float64(b.Direction)
-		
+
 		// Wrap around screen
 		if b.X < -BirdWidth && b.Direction < 0 {
 			b.X = ScreenWidth
 		} else if b.X > ScreenWidth && b.Direction > 0 {
 			b.X = -BirdWidth
 		}
-		
+
 		// Check for collision with player
-		if g.player.X+PlayerWidth/4 >= b.X && 
-		   g.player.X-PlayerWidth/4 <= b.X+BirdWidth &&
-		   g.player.Y+PlayerHeight/4 >= b.Y && 
-		   g.player.Y-PlayerHeight/4 <= b.Y+BirdHeight {
+		if g.player.X+PlayerWidth/4 >= b.X &&
+			g.player.X-PlayerWidth/4 <= b.X+BirdWidth &&
+			g.player.Y+PlayerHeight/4 >= b.Y &&
+			g.player.Y-PlayerHeight/4 <= b.Y+BirdHeight {
 			g.gameOver = true
 		}
 	}
@@ -350,11 +350,11 @@ func (g *Game) Update() error {
 	if g.player.VelocityY > 0 {
 		for i := range g.platforms {
 			p := &g.platforms[i]
-			if g.player.X+PlayerWidth/3 >= p.X && 
-			   g.player.X-PlayerWidth/3 <= p.X+PlatformWidth &&
-			   g.player.Y+PlayerHeight/2 >= p.Y && 
-			   g.player.Y+PlayerHeight/2 <= p.Y+PlatformHeight && 
-			   g.player.VelocityY > 0 {
+			if g.player.X+PlayerWidth/3 >= p.X &&
+				g.player.X-PlayerWidth/3 <= p.X+PlatformWidth &&
+				g.player.Y+PlayerHeight/2 >= p.Y &&
+				g.player.Y+PlayerHeight/2 <= p.Y+PlatformHeight &&
+				g.player.VelocityY > 0 {
 				g.player.VelocityY = JumpVelocity
 			}
 		}
@@ -378,11 +378,11 @@ func (g *Game) Update() error {
 				g.score++
 			}
 		}
-		
+
 		// Move birds down
 		for i := range g.birds {
 			g.birds[i].Y += diff
-			
+
 			// If bird goes off screen, create new one at the top
 			if g.birds[i].Y > ScreenHeight {
 				g.birds[i].Y = -BirdHeight
@@ -394,11 +394,11 @@ func (g *Game) Update() error {
 				g.birds[i].SpeedX = BirdSpeedMin + rand.Float64()*(BirdSpeedMax-BirdSpeedMin)
 			}
 		}
-		
+
 		// Move clouds down
 		for i := range g.clouds {
 			g.clouds[i].Y += diff
-			
+
 			// If cloud goes off screen, create new one at the top
 			if g.clouds[i].Y > ScreenHeight {
 				g.clouds[i].Y = -CloudHeight
@@ -420,36 +420,36 @@ func (g *Game) Update() error {
 // Draw draws the game screen
 func (g *Game) Draw(screen *ebiten.Image) {
 	var bgColor color.RGBA
-	
+
 	// Set background color based on day/night mode
 	if g.nightMode {
 		bgColor = color.RGBA{0x20, 0x30, 0x50, 0xff} // Dark blue night sky
 	} else {
 		bgColor = color.RGBA{0x80, 0xa0, 0xc0, 0xff} // Light blue day sky
 	}
-	
+
 	// Clear the screen
 	screen.Fill(bgColor)
-	
+
 	// Draw clouds
 	for _, c := range g.clouds {
 		op := &ebiten.DrawImageOptions{}
-		
+
 		// Scale cloud based on its size
 		sx := c.Width / CloudWidth
 		sy := c.Height / CloudHeight
 		op.GeoM.Scale(sx, sy)
-		
+
 		// Position cloud
 		op.GeoM.Translate(c.X, c.Y)
-		
+
 		// Adjust cloud color and transparency based on night mode
 		if g.nightMode {
 			op.ColorM.Scale(0.5, 0.5, 0.7, c.Alpha*0.7) // Darker, bluer clouds at night
 		} else {
 			op.ColorM.Scale(1, 1, 1, c.Alpha) // Normal white clouds during day
 		}
-		
+
 		screen.DrawImage(g.cloudImg, op)
 	}
 
@@ -457,12 +457,12 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	for _, p := range g.platforms {
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Translate(p.X, p.Y)
-		
+
 		// Apply night mode color adjustment
 		if g.nightMode {
 			op.ColorM.Scale(0.7, 0.7, 0.9, 1) // Slightly darker, bluer at night
 		}
-		
+
 		screen.DrawImage(g.platformImg, op)
 	}
 
@@ -470,28 +470,28 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	for _, b := range g.birds {
 		op := &ebiten.DrawImageOptions{}
 		op.GeoM.Translate(b.X, b.Y)
-		
+
 		// Apply night mode color adjustment
 		if g.nightMode {
 			op.ColorM.Scale(0.7, 0.7, 0.8, 1) // Darker at night
 		}
-		
+
 		if b.Direction > 0 {
 			screen.DrawImage(g.birdRightImg, op)
 		} else {
 			screen.DrawImage(g.birdLeftImg, op)
 		}
 	}
-	
+
 	// Draw weather particles (rain or snow)
 	for _, p := range g.particles {
 		if g.weather == WeatherRain {
 			// Draw raindrops as blue lines
 			x1 := p.X
 			y1 := p.Y
-			x2 := p.X - p.SpeedX * 0.5
-			y2 := p.Y - p.SpeedY * 0.5
-			
+			x2 := p.X - p.SpeedX*0.5
+			y2 := p.Y - p.SpeedY*0.5
+
 			if g.nightMode {
 				ebitenutil.DrawLine(screen, x1, y1, x2, y2, color.RGBA{100, 150, 255, uint8(p.Alpha * 255)})
 			} else {
@@ -515,17 +515,17 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		op.GeoM.Translate(PlayerWidth, 0)
 	}
 	op.GeoM.Translate(g.player.X-PlayerWidth/2, g.player.Y-PlayerHeight/2)
-	
-	// Apply night mode color adjustment 
+
+	// Apply night mode color adjustment
 	if g.nightMode {
 		op.ColorM.Scale(0.7, 0.7, 0.9, 1) // Darker at night
 	}
-	
+
 	screen.DrawImage(g.playerImg, op)
 
 	// Draw score and info
 	ebitenutil.DebugPrintAt(screen, "Score: "+strconv.Itoa(g.score), 5, 5)
-	
+
 	// Display current weather
 	var weatherText string
 	switch g.weather {
@@ -536,7 +536,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	case WeatherSnow:
 		weatherText = "Snowy"
 	}
-	
+
 	// Display time mode
 	var timeText string
 	if g.nightMode {
@@ -544,18 +544,18 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	} else {
 		timeText = "Day"
 	}
-	
+
 	modeText := timeText + " / " + weatherText
 	ebitenutil.DebugPrintAt(screen, modeText, 5, 20)
 	ebitenutil.DebugPrintAt(screen, "N: Toggle Night, W: Toggle Weather", 5, ScreenHeight-20)
-	
+
 	// Draw game over message
 	if g.gameOver {
 		msg := "Game Over! Press SPACE to restart"
 		ebitenutil.DebugPrintAt(
-			screen, 
-			msg, 
-			ScreenWidth/2-len(msg)*3, 
+			screen,
+			msg,
+			ScreenWidth/2-len(msg)*3,
 			ScreenHeight/2,
 		)
 	}
