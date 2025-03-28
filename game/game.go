@@ -1,10 +1,12 @@
 package game
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	_ "image/png"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"strconv"
@@ -26,17 +28,27 @@ const (
 	BirdHeight     = 30
 	CloudWidth     = 80
 	CloudHeight    = 40
-	Gravity        = 0.2
-	JumpVelocity   = -8
+	Gravity        = 0.15   // Reduced gravity for easier control
+	JumpVelocity   = -7     // Slightly less powerful jump for better control
 	PlatformCount  = 10
-	BirdCount      = 3
+	InitialBirdCount = 1    // Start with just 1 bird
+	MaxBirdCount   = 8      // Maximum number of birds at highest difficulty
+	MaxBirdsPerLine = 2     // Maximum birds allowed at the same height
 	CloudCount     = 5
 	SnowflakeCount = 40
 	RaindropCount  = 50
-	BirdSpeedMin   = 1
-	BirdSpeedMax   = 3
+	InitialBirdSpeedMin = 0.7  // Start with slower birds
+	InitialBirdSpeedMax = 1.5
+	MaxBirdSpeedMin = 2.5      // Maximum bird speed at highest difficulty
+	MaxBirdSpeedMax = 4.0
 	CloudSpeedMin  = 0.2
 	CloudSpeedMax  = 1.0
+	BoostSpawnChance = 0.15   // Increased boost chance (15%)
+	BulletSpeed    = 5
+	FlyDuration    = 4.0     // Increased flying time
+	ShootCooldown  = 0.4     // Shorter cooldown for shooting
+	BoostDuration  = 12.0    // Longer boost duration
+	ScorePerDifficulty = 20  // Score increment when difficulty increases
 )
 
 // Weather types
@@ -45,6 +57,22 @@ const (
 	WeatherRain
 	WeatherSnow
 )
+
+// Boost types
+const (
+	BoostNone = iota
+	BoostSpeed
+	BoostJump
+	BoostShield
+)
+
+// Bullet represents a projectile fired by the player
+type Bullet struct {
+	X, Y      float64
+	Direction int
+	Speed     float64
+	Active    bool
+}
 
 // We don't actually need the embed since the files are loaded directly
 // This is a workaround as embed paths can't be relative to parent directories
@@ -84,6 +112,19 @@ type Player struct {
 	X, Y        float64
 	VelocityY   float64
 	FacingRight bool
+	CanFly      bool
+	FlyTimer    float64
+	ShootTimer  float64
+	Bullets     []Bullet
+	BoostType   int
+	BoostTimer  float64
+}
+
+// Boost represents a powerup that the player can collect
+type Boost struct {
+	X, Y     float64
+	Type     int
+	Active   bool
 }
 
 // Game implements ebiten.Game interface
@@ -93,8 +134,14 @@ type Game struct {
 	birds        []Bird
 	clouds       []Cloud
 	particles    []Particle
+	boosts       []Boost
+	bullets      []Bullet
 	camera       float64
 	score        int
+	difficulty   int        // Current difficulty level
+	birdCount    int        // Current number of birds (increases with difficulty)
+	birdSpeedMin float64    // Current min bird speed (increases with difficulty)
+	birdSpeedMax float64    // Current max bird speed (increases with difficulty)
 	playerImg    *ebiten.Image
 	platformImg  *ebiten.Image
 	birdLeftImg  *ebiten.Image
@@ -106,6 +153,7 @@ type Game struct {
 	startTime    time.Time
 	cycleTime    time.Duration
 	weatherTimer float64 // counter for weather changes
+	gameTime     float64 // time elapsed since game start (in seconds)
 }
 
 // loadImage loads an image from file path
@@ -133,16 +181,30 @@ func NewGame() *Game {
 			X:           ScreenWidth / 2,
 			Y:           ScreenHeight - 100,
 			FacingRight: true,
+			CanFly:      false,
+			FlyTimer:    0,
+			ShootTimer:  0,
+			Bullets:     make([]Bullet, 0),
+			BoostType:   BoostNone,
+			BoostTimer:  0,
 		},
 		platforms:    make([]Platform, PlatformCount),
-		birds:        make([]Bird, BirdCount),
+		birds:        make([]Bird, InitialBirdCount),  // Start with fewer birds
 		clouds:       make([]Cloud, CloudCount),
 		particles:    make([]Particle, 0, RaindropCount),
+		boosts:       make([]Boost, 0, 3),
+		bullets:      make([]Bullet, 0, 10),
+		score:        0,
+		difficulty:   0,                      // Start at difficulty 0
+		birdCount:    InitialBirdCount,       // Start with initial bird count
+		birdSpeedMin: InitialBirdSpeedMin,    // Start with slower birds
+		birdSpeedMax: InitialBirdSpeedMax,
 		gameOver:     false,
 		startTime:    time.Now(),
-		cycleTime:    time.Minute * 2,     // Day/night cycle every 2 minutes
-		weatherTimer: rand.Float64() * 15, // Random time until weather changes
+		cycleTime:    time.Minute * 2,        // Day/night cycle every 2 minutes
+		weatherTimer: rand.Float64() * 15,    // Random time until weather changes
 		weather:      WeatherClear,
+		gameTime:     0,
 	}
 
 	// Load images
@@ -171,7 +233,7 @@ func NewGame() *Game {
 	}
 
 	// Initialize birds
-	for i := 0; i < BirdCount; i++ {
+	for i := 0; i < InitialBirdCount; i++ {
 		direction := 1
 		if rand.Float64() < 0.5 {
 			direction = -1
@@ -180,7 +242,7 @@ func NewGame() *Game {
 		g.birds[i] = Bird{
 			X:         rand.Float64() * ScreenWidth,
 			Y:         rand.Float64() * ScreenHeight / 2, // Birds in upper half
-			SpeedX:    BirdSpeedMin + rand.Float64()*(BirdSpeedMax-BirdSpeedMin),
+			SpeedX:    g.birdSpeedMin + rand.Float64()*(g.birdSpeedMax-g.birdSpeedMin),
 			Direction: direction,
 		}
 	}
@@ -238,6 +300,9 @@ func (g *Game) Update() error {
 		return nil
 	}
 
+	// Update game time
+	g.gameTime += 1.0 / 60.0 // Assume 60 FPS
+
 	// Toggle night mode with 'N' key
 	if inpututil.IsKeyJustPressed(ebiten.KeyN) {
 		g.nightMode = !g.nightMode
@@ -249,15 +314,12 @@ func (g *Game) Update() error {
 		g.particles = g.particles[:0]   // Clear particles
 	}
 
-	// Update day/night cycle based on time
-	elapsed := time.Since(g.startTime).Seconds()
-	cycleSeconds := g.cycleTime.Seconds()
-
-	// Auto-toggle night mode based on cycle time
-	if int(elapsed/cycleSeconds)%2 == 1 {
-		g.nightMode = true
-	} else {
+	// Update day/night cycle based on game time (every 2 minutes)
+	minutesPassed := int(g.gameTime / 60)
+	if minutesPassed % 2 == 0 {
 		g.nightMode = false
+	} else {
+		g.nightMode = true
 	}
 
 	// Weather timer and changes
@@ -294,26 +356,146 @@ func (g *Game) Update() error {
 			i--
 		}
 	}
+	
+	// Update boost timers
+	if g.player.BoostTimer > 0 {
+		g.player.BoostTimer -= 1.0 / 60.0
+		if g.player.BoostTimer <= 0 {
+			g.player.BoostType = BoostNone
+		}
+	}
+
+	// Update fly timer
+	if g.player.CanFly {
+		g.player.FlyTimer -= 1.0 / 60.0
+		if g.player.FlyTimer <= 0 {
+			g.player.CanFly = false
+		}
+	}
+
+	// Update shoot timer
+	if g.player.ShootTimer > 0 {
+		g.player.ShootTimer -= 1.0 / 60.0
+	}
+	
+	// Update boosts
+	for i := 0; i < len(g.boosts); i++ {
+		// Check for collision with player
+		if g.boosts[i].Active &&
+			g.player.X+PlayerWidth/3 >= g.boosts[i].X &&
+			g.player.X-PlayerWidth/3 <= g.boosts[i].X+PlatformWidth/2 &&
+			g.player.Y+PlayerHeight/2 >= g.boosts[i].Y &&
+			g.player.Y-PlayerHeight/2 <= g.boosts[i].Y+PlatformHeight*2 {
+			
+			// Apply boost effect
+			g.player.BoostType = g.boosts[i].Type
+			g.player.BoostTimer = BoostDuration
+			
+			// Deactivate boost
+			g.boosts[i].Active = false
+			
+			// If it's the fly boost, enable flying
+			if g.boosts[i].Type == BoostJump {
+				g.player.CanFly = true
+				g.player.FlyTimer = FlyDuration
+			}
+		}
+		
+		// Remove inactive boosts
+		if !g.boosts[i].Active {
+			g.boosts[i] = g.boosts[len(g.boosts)-1]
+			g.boosts = g.boosts[:len(g.boosts)-1]
+			i--
+		}
+	}
 
 	// Handle input
+	playerSpeed := 3.0
+	if g.player.BoostType == BoostSpeed {
+		playerSpeed = 5.0 // Speed boost makes player move faster
+	}
+
 	if ebiten.IsKeyPressed(ebiten.KeyLeft) || ebiten.IsKeyPressed(ebiten.KeyA) {
-		g.player.X -= 3
+		g.player.X -= playerSpeed
 		g.player.FacingRight = false
 		if g.player.X < 0 {
 			g.player.X = ScreenWidth
 		}
 	}
 	if ebiten.IsKeyPressed(ebiten.KeyRight) || ebiten.IsKeyPressed(ebiten.KeyD) {
-		g.player.X += 3
+		g.player.X += playerSpeed
 		g.player.FacingRight = true
 		if g.player.X > ScreenWidth {
 			g.player.X = 0
 		}
 	}
 
-	// Apply gravity
+	// Fly with Up key (if can fly)
+	if (ebiten.IsKeyPressed(ebiten.KeyUp) || ebiten.IsKeyPressed(ebiten.KeyW)) && g.player.CanFly {
+		g.player.VelocityY = -4 // Fly upward
+	}
+
+	// Toggle flying with F key
+	if inpututil.IsKeyJustPressed(ebiten.KeyF) && g.player.FlyTimer <= 0 {
+		g.player.CanFly = true
+		g.player.FlyTimer = FlyDuration
+	}
+
+	// Shooting with Space key
+	if inpututil.IsKeyJustPressed(ebiten.KeySpace) && g.player.ShootTimer <= 0 {
+		// Create a new bullet
+		direction := 1
+		if !g.player.FacingRight {
+			direction = -1
+		}
+		
+		bullet := Bullet{
+			X:         g.player.X + float64(direction*PlayerWidth/2),
+			Y:         g.player.Y,
+			Direction: direction,
+			Speed:     BulletSpeed,
+			Active:    true,
+		}
+		
+		g.bullets = append(g.bullets, bullet)
+		g.player.ShootTimer = ShootCooldown
+	}
+
+	// Apply gravity (unless flying)
 	g.player.VelocityY += Gravity
 	g.player.Y += g.player.VelocityY
+
+	// Update bullets
+	for i := 0; i < len(g.bullets); i++ {
+		g.bullets[i].X += g.bullets[i].Speed * float64(g.bullets[i].Direction)
+		
+		// Check if bullet is off screen
+		if g.bullets[i].X < 0 || g.bullets[i].X > ScreenWidth {
+			g.bullets[i] = g.bullets[len(g.bullets)-1]
+			g.bullets = g.bullets[:len(g.bullets)-1]
+			i--
+			continue
+		}
+		
+		// Check for collision with birds
+		for j := range g.birds {
+			b := &g.birds[j]
+			if g.bullets[i].X >= b.X && 
+				g.bullets[i].X <= b.X+BirdWidth &&
+				g.bullets[i].Y >= b.Y &&
+				g.bullets[i].Y <= b.Y+BirdHeight {
+				
+				// Remove bird and regenerate it above
+				b.Y = -BirdHeight * 2  // Move bird off screen to be regenerated
+				
+				// Remove bullet
+				g.bullets[i] = g.bullets[len(g.bullets)-1]
+				g.bullets = g.bullets[:len(g.bullets)-1]
+				i--
+				break
+			}
+		}
+	}
 
 	// Update cloud positions
 	for i := range g.clouds {
@@ -342,7 +524,14 @@ func (g *Game) Update() error {
 			g.player.X-PlayerWidth/4 <= b.X+BirdWidth &&
 			g.player.Y+PlayerHeight/4 >= b.Y &&
 			g.player.Y-PlayerHeight/4 <= b.Y+BirdHeight {
-			g.gameOver = true
+			
+			// Shield boost protects against birds
+			if g.player.BoostType != BoostShield {
+				g.gameOver = true
+			} else {
+				// Remove bird and regenerate it above instead of game over
+				b.Y = -BirdHeight * 2
+			}
 		}
 	}
 
@@ -376,6 +565,63 @@ func (g *Game) Update() error {
 				g.platforms[i].Y = 0
 				g.platforms[i].X = rand.Float64() * (ScreenWidth - PlatformWidth)
 				g.score++
+				
+				// Check if difficulty should increase
+				newDifficulty := g.score / ScorePerDifficulty
+				if newDifficulty > g.difficulty {
+					g.difficulty = newDifficulty
+					
+					// Calculate how many birds based on difficulty (cap at MaxBirdCount)
+					newBirdCount := InitialBirdCount + g.difficulty
+					if newBirdCount > MaxBirdCount {
+						newBirdCount = MaxBirdCount
+					}
+					
+					// If we need more birds than we currently have
+					if newBirdCount > g.birdCount {
+						// Add more birds
+						for j := g.birdCount; j < newBirdCount; j++ {
+							direction := 1
+							if rand.Float64() < 0.5 {
+								direction = -1
+							}
+							
+							// Place new bird above the screen
+							newBird := Bird{
+								X:         rand.Float64() * ScreenWidth,
+								Y:         -BirdHeight * float64(1+j%MaxBirdsPerLine), // Stagger birds vertically
+								SpeedX:    g.birdSpeedMin + rand.Float64()*(g.birdSpeedMax-g.birdSpeedMin),
+								Direction: direction,
+							}
+							g.birds = append(g.birds, newBird)
+						}
+						g.birdCount = newBirdCount
+					}
+					
+					// Increase bird speed gradually up to max values
+					progressFactor := float64(g.difficulty) / 10 // Full speed increase over ~10 difficulty levels
+					if progressFactor > 1 {
+						progressFactor = 1
+					}
+					
+					// Linear interpolation between initial and max speeds
+					g.birdSpeedMin = InitialBirdSpeedMin + progressFactor*(MaxBirdSpeedMin-InitialBirdSpeedMin)
+					g.birdSpeedMax = InitialBirdSpeedMax + progressFactor*(MaxBirdSpeedMax-InitialBirdSpeedMax)
+				}
+				
+				// Potentially spawn a boost on this platform
+				if rand.Float64() < BoostSpawnChance {
+					boostType := rand.Intn(3) + 1 // Random boost type 1-3
+					
+					boost := Boost{
+						X:      g.platforms[i].X + PlatformWidth/4,
+						Y:      g.platforms[i].Y - PlatformHeight*2,
+						Type:   boostType,
+						Active: true,
+					}
+					
+					g.boosts = append(g.boosts, boost)
+				}
 			}
 		}
 
@@ -385,13 +631,46 @@ func (g *Game) Update() error {
 
 			// If bird goes off screen, create new one at the top
 			if g.birds[i].Y > ScreenHeight {
-				g.birds[i].Y = -BirdHeight
+				// Check for existing birds at similar heights (enforce max birds per line)
+				validPosition := false
+				maxAttempts := 10
+				attempts := 0
+				
+				// Keep trying new positions until we find a valid one
+				for !validPosition && attempts < maxAttempts {
+					// Start with a random Y position above the screen
+					newY := -BirdHeight - float64(rand.Intn(3))*BirdHeight
+					
+					// Check if this position would cause more than MaxBirdsPerLine at same height
+					birdsAtSameHeight := 0
+					for j := range g.birds {
+						if j != i && math.Abs(g.birds[j].Y-newY) < BirdHeight {
+							birdsAtSameHeight++
+						}
+					}
+					
+					// If we have fewer than max birds per line at this height, it's valid
+					if birdsAtSameHeight < MaxBirdsPerLine {
+						g.birds[i].Y = newY
+						validPosition = true
+					}
+					
+					attempts++
+				}
+				
+				// If we couldn't find a valid position after max attempts, place bird higher
+				if !validPosition {
+					g.birds[i].Y = -BirdHeight * (5 + rand.Float64()*5)
+				}
+				
 				g.birds[i].X = rand.Float64() * ScreenWidth
 				g.birds[i].Direction = 1
 				if rand.Float64() < 0.5 {
 					g.birds[i].Direction = -1
 				}
-				g.birds[i].SpeedX = BirdSpeedMin + rand.Float64()*(BirdSpeedMax-BirdSpeedMin)
+				
+				// Use current dynamic speed range
+				g.birds[i].SpeedX = g.birdSpeedMin + rand.Float64()*(g.birdSpeedMax-g.birdSpeedMin)
 			}
 		}
 
@@ -464,6 +743,45 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 
 		screen.DrawImage(g.platformImg, op)
+	}
+	
+	// Draw boosts
+	for _, b := range g.boosts {
+		if b.Active {
+			var boostColor color.RGBA
+			
+			// Different colors for different boost types
+			switch b.Type {
+			case BoostSpeed:
+				boostColor = color.RGBA{255, 50, 50, 255} // Red for speed
+			case BoostJump:
+				boostColor = color.RGBA{50, 255, 50, 255} // Green for jump/fly
+			case BoostShield:
+				boostColor = color.RGBA{50, 50, 255, 255} // Blue for shield
+			}
+			
+			// Adjust color for night mode
+			if g.nightMode {
+				boostColor.R = uint8(float64(boostColor.R) * 0.7)
+				boostColor.G = uint8(float64(boostColor.G) * 0.7)
+				boostColor.B = uint8(float64(boostColor.B) * 0.8)
+			}
+			
+			// Draw boost as a colored circle
+			ebitenutil.DrawCircle(screen, b.X, b.Y, 10, boostColor)
+		}
+	}
+	
+	// Draw bullets
+	for _, b := range g.bullets {
+		if b.Active {
+			bulletColor := color.RGBA{255, 255, 0, 255} // Yellow bullets
+			if g.nightMode {
+				bulletColor = color.RGBA{200, 200, 50, 255} // Darker yellow at night
+			}
+			
+			ebitenutil.DrawCircle(screen, b.X, b.Y, 3, bulletColor)
+		}
 	}
 
 	// Draw birds
@@ -547,6 +865,33 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	modeText := timeText + " / " + weatherText
 	ebitenutil.DebugPrintAt(screen, modeText, 5, 20)
+	
+	// Display active boost
+	var boostText string
+	switch g.player.BoostType {
+	case BoostNone:
+		boostText = "No Boost"
+	case BoostSpeed:
+		boostText = "Speed Boost: " + fmt.Sprintf("%.1f", g.player.BoostTimer)
+	case BoostJump:
+		boostText = "Jump Boost: " + fmt.Sprintf("%.1f", g.player.BoostTimer)
+	case BoostShield:
+		boostText = "Shield Boost: " + fmt.Sprintf("%.1f", g.player.BoostTimer)
+	}
+	ebitenutil.DebugPrintAt(screen, boostText, 5, 35)
+	
+	// Display if flying is active
+	if g.player.CanFly {
+		flyText := "Flying: " + fmt.Sprintf("%.1f", g.player.FlyTimer)
+		ebitenutil.DebugPrintAt(screen, flyText, 5, 50)
+	}
+	
+	// Display difficulty level
+	difficultyText := fmt.Sprintf("Difficulty: %d (Birds: %d)", g.difficulty, len(g.birds))
+	ebitenutil.DebugPrintAt(screen, difficultyText, 5, 65)
+	
+	// Controls info at bottom
+	ebitenutil.DebugPrintAt(screen, "Left/Right: Move, F: Fly, Space: Shoot", 5, ScreenHeight-35)
 	ebitenutil.DebugPrintAt(screen, "N: Toggle Night, W: Toggle Weather", 5, ScreenHeight-20)
 
 	// Draw game over message

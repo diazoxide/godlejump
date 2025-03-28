@@ -1,5 +1,4 @@
-// This is a temporary file to generate the initial assets
-// It won't be used in the final game
+// This is a file to generate the assets
 package main
 
 import (
@@ -11,7 +10,7 @@ import (
 )
 
 func main() {
-	// Create player sprite
+	// Create player sprite (flying character)
 	playerImg := image.NewRGBA(image.Rect(0, 0, 40, 40))
 	
 	// Fill background with transparency
@@ -21,45 +20,73 @@ func main() {
 		}
 	}
 	
-	// Draw character body (green circle)
-	for y := 5; y < 35; y++ {
-		for x := 5; x < 35; x++ {
+	// Draw bird-like body (blue)
+	for y := 10; y < 30; y++ {
+		for x := 10; x < 30; x++ {
 			dx := float64(x - 20)
 			dy := float64(y - 20)
-			if dx*dx + dy*dy < 15*15 {
-				playerImg.Set(x, y, color.RGBA{50, 200, 50, 255})
+			if dx*dx + dy*dy < 10*10 {
+				playerImg.Set(x, y, color.RGBA{50, 100, 220, 255})
+			}
+		}
+	}
+	
+	// Draw wings
+	for y := 15; y < 25; y++ {
+		for x := 2; x < 15; x++ {
+			// Wing shape - curved
+			dx := float64(x - 8)
+			dy := float64(y - 20)
+			if dx*dx/36 + dy*dy/25 < 1 {
+				playerImg.Set(x, y, color.RGBA{100, 150, 240, 255})
+			}
+		}
+	}
+	
+	// Right wing
+	for y := 15; y < 25; y++ {
+		for x := 25; x < 38; x++ {
+			dx := float64(x - 32)
+			dy := float64(y - 20)
+			if dx*dx/36 + dy*dy/25 < 1 {
+				playerImg.Set(x, y, color.RGBA{100, 150, 240, 255})
 			}
 		}
 	}
 	
 	// Draw eyes
-	for y := 12; y < 16; y++ {
-		for x := 12; x < 16; x++ {
+	for y := 14; y < 18; y++ {
+		for x := 16; x < 19; x++ {
 			playerImg.Set(x, y, color.RGBA{255, 255, 255, 255})
 		}
 	}
-	for y := 12; y < 16; y++ {
-		for x := 24; x < 28; x++ {
+	for y := 14; y < 18; y++ {
+		for x := 22; x < 25; x++ {
 			playerImg.Set(x, y, color.RGBA{255, 255, 255, 255})
 		}
 	}
 	
 	// Draw pupils
-	for y := 13; y < 15; y++ {
-		for x := 13; x < 15; x++ {
+	for y := 15; y < 17; y++ {
+		for x := 17; x < 18; x++ {
 			playerImg.Set(x, y, color.RGBA{0, 0, 0, 255})
 		}
 	}
-	for y := 13; y < 15; y++ {
-		for x := 25; x < 27; x++ {
+	for y := 15; y < 17; y++ {
+		for x := 23; x < 24; x++ {
 			playerImg.Set(x, y, color.RGBA{0, 0, 0, 255})
 		}
 	}
 	
-	// Draw mouth
-	for y := 25; y < 27; y++ {
-		for x := 15; x < 25; x++ {
-			playerImg.Set(x, y, color.RGBA{255, 100, 100, 255})
+	// Draw beak
+	for y := 17; y < 22; y++ {
+		for x := 30; x < 35; x++ {
+			dx := float64(x - 32)
+			dy := float64(y - 19)
+			
+			if dx*dx/25 + dy*dy/12 < 1 {
+				playerImg.Set(x, y, color.RGBA{255, 200, 0, 255})
+			}
 		}
 	}
 	
