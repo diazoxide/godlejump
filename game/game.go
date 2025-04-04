@@ -1,6 +1,8 @@
 package game
 
 import (
+	"bytes"
+	"embed"
 	"fmt"
 	"image"
 	"image/color"
@@ -8,7 +10,6 @@ import (
 	"log"
 	"math"
 	"math/rand"
-	"os"
 	"strconv"
 	"time"
 
@@ -16,6 +17,9 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 )
+
+//go:embed assets/*.png
+var gameAssets embed.FS
 
 const (
 	ScreenWidth    = 320
@@ -49,6 +53,32 @@ const (
 	ShootCooldown  = 0.4     // Shorter cooldown for shooting
 	BoostDuration  = 12.0    // Longer boost duration
 	ScorePerDifficulty = 20  // Score increment when difficulty increases
+
+	// Day cycle constants
+	DayCycleLength = 1000.0  // Score points for a full day cycle
+	SunriseStart   = 0.0     // Sunrise phase start (0.0 - 1.0)
+	SunriseEnd     = 0.2     // Sunrise phase end
+	DayStart       = 0.2     // Day phase start
+	DayEnd         = 0.7     // Day phase end
+	SunsetStart    = 0.7     // Sunset phase start
+	SunsetEnd      = 0.9     // Sunset phase end
+	NightStart     = 0.9     // Night phase start
+	NightEnd       = 1.0     // Night phase end (wraps to 0.0)
+
+	// Mountain parameters
+	MountainCount  = 3       // Number of mountain layers
+	MountainPoints = 8       // Control points for curves
+	MountainDetail = 100     // Reduced detail but still smooth
+	ParallaxFactor = 0.1     // Parallax factor
+	MountainSliceHeight = 4  // Draw mountains in larger slices for better performance
+
+	// Time phases in natural order
+	TimeMidnight  = 0.0
+	TimeNight     = 0.2
+	TimeSunrise   = 0.4
+	TimeMorning   = 0.6
+	TimeDay       = 0.8
+	TimeSunset    = 1.0
 )
 
 // Weather types
@@ -66,6 +96,20 @@ const (
 	BoostShield
 )
 
+// Platform types
+const (
+	PlatformNormal = iota
+	PlatformSticky
+	PlatformDisappearing
+)
+
+// Platform animation states
+const (
+	PlatformIntact = iota
+	PlatformBreaking
+	PlatformBroken
+)
+
 // Bullet represents a projectile fired by the player
 type Bullet struct {
 	X, Y      float64
@@ -74,12 +118,12 @@ type Bullet struct {
 	Active    bool
 }
 
-// We don't actually need the embed since the files are loaded directly
-// This is a workaround as embed paths can't be relative to parent directories
-
 // Platform represents a platform in the game
 type Platform struct {
-	X, Y float64
+	X, Y        float64
+	Type        int
+	State       int
+	BreakTimer  float64 // Timer for breaking animation
 }
 
 // Bird represents a bird obstacle
@@ -127,6 +171,254 @@ type Boost struct {
 	Active   bool
 }
 
+// Add this type and the color sets before the Game struct
+type ColorSet struct {
+	skyColors     [7]color.RGBA
+	mountainTints [3]color.RGBA
+}
+
+// Add these types and functions before the Game struct
+type HSV struct {
+	H, S, V float64
+}
+
+type GradientParams struct {
+	baseHue        float64  // Base hue for the gradient
+	hueRange      float64  // How much the hue can vary
+	satRange      [2]float64  // Min/max saturation
+	valRange      [2]float64  // Min/max value/brightness
+	mountainDepth float64  // How much darker/different mountains are
+}
+
+// Convert HSV to RGB color
+func hsvToRGB(hsv HSV) color.RGBA {
+	H, S, V := hsv.H, hsv.S, hsv.V
+	
+	// Constrain values
+	H = math.Mod(H, 360)
+	if S < 0 { S = 0 } else if S > 1 { S = 1 }
+	if V < 0 { V = 0 } else if V > 1 { V = 1 }
+	
+	C := V * S
+	X := C * (1 - math.Abs(math.Mod(H/60, 2)-1))
+	M := V - C
+	
+	var R, G, B float64
+	switch {
+	case H < 60:
+		R, G, B = C, X, 0
+	case H < 120:
+		R, G, B = X, C, 0
+	case H < 180:
+		R, G, B = 0, C, X
+	case H < 240:
+		R, G, B = 0, X, C
+	case H < 300:
+		R, G, B = X, 0, C
+	default:
+		R, G, B = C, 0, X
+	}
+	
+	return color.RGBA{
+		R: uint8((R + M) * 255),
+		G: uint8((G + M) * 255),
+		B: uint8((B + M) * 255),
+		A: 255,
+	}
+}
+
+// Add these helper functions for improved color transitions
+func cosineInterpolate(a, b, t float64) float64 {
+	ft := t * math.Pi
+	f := (1 - math.Cos(ft)) * 0.5
+	return a*(1-f) + b*f
+}
+
+func blend(colors []HSV, t float64) HSV {
+	if t <= 0 {
+		return colors[0]
+	}
+	if t >= 1 {
+		return colors[len(colors)-1]
+	}
+	
+	segment := t * float64(len(colors)-1)
+	i := int(segment)
+	t = segment - float64(i)
+	
+	if i+1 >= len(colors) {
+		return colors[len(colors)-1]
+	}
+	
+	// Cosine interpolation for smoother transitions
+	return HSV{
+		H: cosineInterpolate(colors[i].H, colors[i+1].H, t),
+		S: cosineInterpolate(colors[i].S, colors[i+1].S, t),
+		V: cosineInterpolate(colors[i].V, colors[i+1].V, t),
+	}
+}
+
+// Replace getGradientParams with this improved version
+func getGradientParams(timeOfDay float64) GradientParams {
+	// Define key colors for different times of day
+	keyColors := []struct {
+		time float64
+		sky  []HSV
+		mountain HSV
+	}{
+		{ // Midnight
+			time: 0.0,
+			sky: []HSV{
+				{H: 230, S: 0.6, V: 0.2},  // Deep blue top
+				{H: 235, S: 0.5, V: 0.15}, // Middle
+				{H: 240, S: 0.4, V: 0.1},  // Bottom
+			},
+			mountain: HSV{H: 235, S: 0.4, V: 0.1},
+		},
+		{ // Pre-dawn
+			time: 0.2,
+			sky: []HSV{
+				{H: 240, S: 0.5, V: 0.3},  // Dark blue top
+				{H: 260, S: 0.4, V: 0.2},  // Purple middle
+				{H: 280, S: 0.3, V: 0.15}, // Deep purple bottom
+			},
+			mountain: HSV{H: 250, S: 0.3, V: 0.15},
+		},
+		{ // Dawn
+			time: 0.3,
+			sky: []HSV{
+				{H: 200, S: 0.4, V: 0.6},  // Light blue top
+				{H: 35, S: 0.7, V: 0.7},   // Orange middle
+				{H: 20, S: 0.8, V: 0.8},   // Warm orange bottom
+			},
+			mountain: HSV{H: 30, S: 0.5, V: 0.3},
+		},
+		{ // Morning
+			time: 0.4,
+			sky: []HSV{
+				{H: 195, S: 0.4, V: 0.9},  // Sky blue top
+				{H: 200, S: 0.3, V: 0.8},  // Light blue middle
+				{H: 205, S: 0.2, V: 0.7},  // Pale blue bottom
+			},
+			mountain: HSV{H: 200, S: 0.3, V: 0.4},
+		},
+		{ // Noon
+			time: 0.5,
+			sky: []HSV{
+				{H: 210, S: 0.3, V: 0.9},  // Bright blue top
+				{H: 205, S: 0.2, V: 0.85}, // Light blue middle
+				{H: 200, S: 0.1, V: 0.8},  // Pale blue bottom
+			},
+			mountain: HSV{H: 205, S: 0.2, V: 0.5},
+		},
+		{ // Afternoon
+			time: 0.7,
+			sky: []HSV{
+				{H: 210, S: 0.4, V: 0.8},  // Blue top
+				{H: 215, S: 0.3, V: 0.7},  // Medium blue middle
+				{H: 220, S: 0.2, V: 0.6},  // Light blue bottom
+			},
+			mountain: HSV{H: 215, S: 0.3, V: 0.4},
+		},
+		{ // Sunset
+			time: 0.8,
+			sky: []HSV{
+				{H: 200, S: 0.5, V: 0.6},  // Deep blue top
+				{H: 30, S: 0.8, V: 0.7},   // Orange middle
+				{H: 15, S: 0.9, V: 0.8},   // Red-orange bottom
+			},
+			mountain: HSV{H: 20, S: 0.6, V: 0.3},
+		},
+		{ // Night
+			time: 0.9,
+			sky: []HSV{
+				{H: 230, S: 0.6, V: 0.3},  // Dark blue top
+				{H: 240, S: 0.5, V: 0.2},  // Deep blue middle
+				{H: 250, S: 0.4, V: 0.1},  // Very deep blue bottom
+			},
+			mountain: HSV{H: 235, S: 0.4, V: 0.15},
+		},
+	}
+
+	// Find the two time periods we're between
+	var idx int
+	for i := range keyColors {
+		if timeOfDay < keyColors[i].time {
+			idx = i - 1
+			break
+		}
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(keyColors)-1 {
+		idx = len(keyColors) - 2
+	}
+
+	// Calculate progress between the two time periods
+	t := (timeOfDay - keyColors[idx].time) / (keyColors[idx+1].time - keyColors[idx].time)
+	t = smoothstep(t) // Apply smoothstep for better transitions
+
+	// Create parameters based on the interpolation
+	params := GradientParams{
+		baseHue: cosineInterpolate(keyColors[idx].mountain.H, keyColors[idx+1].mountain.H, t),
+		hueRange: 15, // Reduced range for more subtle variations
+		satRange: [2]float64{
+			cosineInterpolate(keyColors[idx].mountain.S-0.1, keyColors[idx+1].mountain.S-0.1, t),
+			cosineInterpolate(keyColors[idx].mountain.S+0.1, keyColors[idx+1].mountain.S+0.1, t),
+		},
+		valRange: [2]float64{
+			cosineInterpolate(keyColors[idx].mountain.V-0.1, keyColors[idx+1].mountain.V-0.1, t),
+			cosineInterpolate(keyColors[idx].mountain.V+0.1, keyColors[idx+1].mountain.V+0.1, t),
+		},
+		mountainDepth: 0.2, // Consistent mountain depth
+	}
+
+	return params
+}
+
+// Replace generateColorSet with this improved version
+func generateColorSet(params GradientParams) ColorSet {
+	var result ColorSet
+
+	// Generate sky gradient colors with smoother transitions
+	for i := range result.skyColors {
+		progress := float64(i) / float64(len(result.skyColors)-1)
+		
+		// Use subtle sine waves for variation
+		hue := params.baseHue + params.hueRange*0.5*math.Sin(progress*math.Pi)
+		sat := params.satRange[0] + (params.satRange[1]-params.satRange[0])*smoothstep(progress)
+		val := params.valRange[1] - (params.valRange[1]-params.valRange[0])*smoothstep(progress)
+		
+		// Add very subtle variation
+		hue += 2 * math.Sin(progress*2*math.Pi)
+		sat += 0.05 * math.Sin(progress*3*math.Pi)
+		val += 0.05 * math.Sin(progress*2*math.Pi)
+		
+		result.skyColors[i] = hsvToRGB(HSV{hue, sat, val})
+	}
+
+	// Generate mountain colors with proper depth perception
+	for i := range result.mountainTints {
+		progress := float64(i) / float64(len(result.mountainTints)-1)
+		
+		// Gradually adjust mountain colors for depth
+		hue := params.baseHue + 5*progress // Slight hue shift for depth
+		sat := params.satRange[0] * (1 - 0.2*progress)
+		val := params.valRange[0] * (1 - params.mountainDepth*progress)
+		
+		result.mountainTints[i] = hsvToRGB(HSV{hue, sat, val})
+	}
+
+	return result
+}
+
+// Replace the getColorSetForTime function with this:
+func getColorSetForTime(timeOfDay float64) ColorSet {
+	params := getGradientParams(timeOfDay)
+	return generateColorSet(params)
+}
+
 // Game implements ebiten.Game interface
 type Game struct {
 	player       Player
@@ -136,6 +428,7 @@ type Game struct {
 	particles    []Particle
 	boosts       []Boost
 	bullets      []Bullet
+	stars        []struct{ x, y, brightness float64 }  // Add stars
 	camera       float64
 	score        int
 	difficulty   int        // Current difficulty level
@@ -147,6 +440,7 @@ type Game struct {
 	birdLeftImg  *ebiten.Image
 	birdRightImg *ebiten.Image
 	cloudImg     *ebiten.Image
+	mountainImgs []*ebiten.Image  // Mountain layer images
 	gameOver     bool
 	nightMode    bool
 	weather      int
@@ -154,17 +448,26 @@ type Game struct {
 	cycleTime    time.Duration
 	weatherTimer float64 // counter for weather changes
 	gameTime     float64 // time elapsed since game start (in seconds)
+	initialTimeOfDay float64  // Random initial time of day (0.0 - 1.0)
+	stuckToPlatform *Platform
+	stuckTimer      float64    // For visual effect
+	jumpPressed     bool       // Track jump button state
+	canJumpRelease  bool       // Whether player can release from sticky platform
 }
 
-// loadImage loads an image from file path
+// loadImage loads an image from embedded assets
 func loadImage(path string) *ebiten.Image {
-	imgFile, err := os.Open(path)
-	if err != nil {
-		log.Fatalf("Failed to open image: %v", err)
+	// Remove leading "./" from path if present
+	if len(path) > 2 && path[:2] == "./" {
+		path = path[2:]
 	}
-	defer imgFile.Close()
 
-	img, _, err := image.Decode(imgFile)
+	imgBytes, err := gameAssets.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Failed to read embedded image: %v", err)
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(imgBytes))
 	if err != nil {
 		log.Fatalf("Failed to decode image: %v", err)
 	}
@@ -194,6 +497,7 @@ func NewGame() *Game {
 		particles:    make([]Particle, 0, RaindropCount),
 		boosts:       make([]Boost, 0, 3),
 		bullets:      make([]Bullet, 0, 10),
+		stars:        make([]struct{ x, y, brightness float64 }, 100),  // Initialize stars
 		score:        0,
 		difficulty:   0,                      // Start at difficulty 0
 		birdCount:    InitialBirdCount,       // Start with initial bird count
@@ -205,6 +509,8 @@ func NewGame() *Game {
 		weatherTimer: rand.Float64() * 15,    // Random time until weather changes
 		weather:      WeatherClear,
 		gameTime:     0,
+		initialTimeOfDay: rand.Float64(),
+		mountainImgs: make([]*ebiten.Image, 3),
 	}
 
 	// Load images
@@ -220,15 +526,29 @@ func NewGame() *Game {
 
 	// Initial platform directly under the player
 	g.platforms[0] = Platform{
-		X: g.player.X - PlatformWidth/2,
-		Y: ScreenHeight - 30,
+		X:    g.player.X - PlatformWidth/2,
+		Y:    ScreenHeight - 30,
+		Type: PlatformNormal,
 	}
 
 	// Generate random platforms
 	for i := 1; i < PlatformCount; i++ {
+		platformType := PlatformNormal
+		
+		// Platform type distribution
+		rnd := rand.Float64()
+		if rnd < 0.2 { // 20% chance for sticky platform
+			platformType = PlatformSticky
+		} else if rnd < 0.35 { // 15% chance for disappearing platform
+			platformType = PlatformDisappearing
+		}
+		
 		g.platforms[i] = Platform{
-			X: rand.Float64() * (ScreenWidth - PlatformWidth),
-			Y: float64(i) * (ScreenHeight / PlatformCount),
+			X:          rand.Float64() * (ScreenWidth - PlatformWidth),
+			Y:          float64(i) * (ScreenHeight / PlatformCount),
+			Type:       platformType,
+			State:      PlatformIntact,
+			BreakTimer: 0,
 		}
 	}
 
@@ -257,6 +577,19 @@ func NewGame() *Game {
 			Height: CloudHeight * (0.7 + rand.Float64()*0.6),
 			Alpha:  0.5 + rand.Float64()*0.5, // Random transparency
 		}
+	}
+
+	// Load mountain images
+	g.mountainImgs = make([]*ebiten.Image, 3)
+	for i := 0; i < 3; i++ {
+		g.mountainImgs[i] = loadImage(fmt.Sprintf("./assets/mountains_%d.png", i))
+	}
+
+	// Initialize stars with random positions
+	for i := range g.stars {
+		g.stars[i].x = rand.Float64() * float64(ScreenWidth)
+		g.stars[i].y = rand.Float64() * float64(ScreenHeight) * 0.7 // Stars in top 70% of screen
+		g.stars[i].brightness = 0.3 + rand.Float64()*0.7 // Random brightness
 	}
 
 	return g
@@ -303,23 +636,10 @@ func (g *Game) Update() error {
 	// Update game time
 	g.gameTime += 1.0 / 60.0 // Assume 60 FPS
 
-	// Toggle night mode with 'N' key
-	if inpututil.IsKeyJustPressed(ebiten.KeyN) {
-		g.nightMode = !g.nightMode
-	}
-
 	// Toggle weather with 'W' key
 	if inpututil.IsKeyJustPressed(ebiten.KeyW) {
 		g.weather = (g.weather + 1) % 3 // Cycle through weather types
 		g.particles = g.particles[:0]   // Clear particles
-	}
-
-	// Update day/night cycle based on game time (every 2 minutes)
-	minutesPassed := int(g.gameTime / 60)
-	if minutesPassed % 2 == 0 {
-		g.nightMode = false
-	} else {
-		g.nightMode = true
 	}
 
 	// Weather timer and changes
@@ -357,11 +677,93 @@ func (g *Game) Update() error {
 		}
 	}
 	
-	// Update boost timers
-	if g.player.BoostTimer > 0 {
+	// Handle sticky platform release
+	jumpKey := ebiten.IsKeyPressed(ebiten.KeyUp) || ebiten.IsKeyPressed(ebiten.KeyW)
+	spaceKey := ebiten.IsKeyPressed(ebiten.KeySpace)
+	
+	// Check for jump key press
+	if jumpKey || spaceKey {
+		if !g.jumpPressed {
+			// Key was just pressed
+			if g.stuckToPlatform != nil {
+				// Release from platform with a higher jump
+				g.player.VelocityY = float64(JumpVelocity) * 1.2
+				g.stuckToPlatform = nil
+				g.stuckTimer = 0
+			}
+		}
+		g.jumpPressed = true
+	} else {
+		g.jumpPressed = false
+	}
+
+	// Update platform states
+	for i := range g.platforms {
+		p := &g.platforms[i]
+		
+		// Update disappearing platform state
+		if p.Type == PlatformDisappearing && p.State == PlatformBreaking {
+			p.BreakTimer -= 1.0 / 60.0
+			if p.BreakTimer <= 0 {
+				p.State = PlatformBroken
+			}
+		}
+		
+		// Check for collision with player
+		if g.player.X+PlayerWidth/3 >= p.X &&
+			g.player.X-PlayerWidth/3 <= p.X+PlatformWidth &&
+			g.player.Y+PlayerHeight/2 >= p.Y &&
+			g.player.Y+PlayerHeight/2 <= p.Y+PlatformHeight &&
+			g.player.VelocityY > 0 {
+			
+			// Skip broken platforms
+			if p.Type == PlatformDisappearing && p.State == PlatformBroken {
+				continue
+			}
+			
+			if p.Type == PlatformSticky {
+				// Stick to platform
+				g.stuckToPlatform = p
+				g.stuckTimer = 0
+				g.player.VelocityY = 0
+				g.player.Y = p.Y - PlayerHeight/2 // Align player with platform
+				g.canJumpRelease = false // Require new jump press to release
+			} else if p.Type == PlatformDisappearing && p.State == PlatformIntact {
+				// Start breaking animation for disappearing platform
+				p.State = PlatformBreaking
+				p.BreakTimer = 0.3 // Time until platform breaks
+				
+				// Allow player to jump off it once
+				jumpForce := float64(JumpVelocity)
+				if g.player.BoostType == BoostJump {
+					jumpForce *= 1.5
+				}
+				g.player.VelocityY = jumpForce
+			} else {
+				// Normal platform bounce
+				jumpForce := float64(JumpVelocity)
+				if g.player.BoostType == BoostJump {
+					jumpForce *= 1.5
+				}
+				g.player.VelocityY = jumpForce
+			}
+		}
+	}
+
+	// Update stuck timer for animation
+	if g.stuckToPlatform != nil {
+		g.stuckTimer += 1.0 / 60.0
+		// Keep player stuck to platform
+		g.player.Y = g.stuckToPlatform.Y - PlayerHeight/2
+		g.player.VelocityY = 0
+	}
+
+	// Update boost effects
+	if g.player.BoostType != BoostNone {
 		g.player.BoostTimer -= 1.0 / 60.0
 		if g.player.BoostTimer <= 0 {
 			g.player.BoostType = BoostNone
+			g.player.BoostTimer = 0
 		}
 	}
 
@@ -535,19 +937,7 @@ func (g *Game) Update() error {
 		}
 	}
 
-	// Check for platform collisions
-	if g.player.VelocityY > 0 {
-		for i := range g.platforms {
-			p := &g.platforms[i]
-			if g.player.X+PlayerWidth/3 >= p.X &&
-				g.player.X-PlayerWidth/3 <= p.X+PlatformWidth &&
-				g.player.Y+PlayerHeight/2 >= p.Y &&
-				g.player.Y+PlayerHeight/2 <= p.Y+PlatformHeight &&
-				g.player.VelocityY > 0 {
-				g.player.VelocityY = JumpVelocity
-			}
-		}
-	}
+	// Platform collisions are handled in the Update platform states section above
 
 	// Camera follows player when jumping high
 	highPoint := ScreenHeight * 0.4
@@ -565,6 +955,21 @@ func (g *Game) Update() error {
 				g.platforms[i].Y = 0
 				g.platforms[i].X = rand.Float64() * (ScreenWidth - PlatformWidth)
 				g.score++
+				
+				// Reset platform state if it was broken
+				if g.platforms[i].Type == PlatformDisappearing {
+					g.platforms[i].State = PlatformIntact
+				}
+				
+				// Generate a new platform type
+				platformType := PlatformNormal
+				rnd := rand.Float64()
+				if rnd < 0.2 { // 20% chance for sticky platform
+					platformType = PlatformSticky
+				} else if rnd < 0.35 { // 15% chance for disappearing platform
+					platformType = PlatformDisappearing
+				}
+				g.platforms[i].Type = platformType
 				
 				// Check if difficulty should increase
 				newDifficulty := g.score / ScorePerDifficulty
@@ -698,51 +1103,247 @@ func (g *Game) Update() error {
 
 // Draw draws the game screen
 func (g *Game) Draw(screen *ebiten.Image) {
-	var bgColor color.RGBA
+	// Calculate current time of day (0.0 - 1.0)
+	timeOfDay := math.Mod(float64(g.score)/DayCycleLength + g.initialTimeOfDay, 1.0)
 
-	// Set background color based on day/night mode
-	if g.nightMode {
-		bgColor = color.RGBA{0x20, 0x30, 0x50, 0xff} // Dark blue night sky
-	} else {
-		bgColor = color.RGBA{0x80, 0xa0, 0xc0, 0xff} // Light blue day sky
+	// Get color set for current time
+	colorSet := getColorSetForTime(timeOfDay)
+
+	// Draw sky gradient
+	for y := 0; y < ScreenHeight; y++ {
+		progress := float64(y) / float64(ScreenHeight)
+		
+		// Get base colors for interpolation
+		baseColors := colorSet.skyColors
+		
+		// Calculate smooth color transition
+		var color color.RGBA
+		
+		// Use continuous interpolation across all colors
+		t := progress * float64(len(baseColors)-1)
+		i := int(t)
+		if i >= len(baseColors)-1 {
+			color = baseColors[len(baseColors)-1]
+		} else {
+			// Get fractional progress between two colors
+			frac := t - float64(i)
+			
+			// Use smoothstep for better color blending
+			frac = smoothstep(frac)
+			
+			// Get the two colors to blend between
+			c1 := baseColors[i]
+			c2 := baseColors[i+1]
+			
+			// Interpolate in RGB space with gamma correction
+			r := uint8(math.Pow((math.Pow(float64(c1.R)/255, 2.2)*(1-frac) + math.Pow(float64(c2.R)/255, 2.2)*frac), 1/2.2) * 255)
+			g := uint8(math.Pow((math.Pow(float64(c1.G)/255, 2.2)*(1-frac) + math.Pow(float64(c2.G)/255, 2.2)*frac), 1/2.2) * 255)
+			b := uint8(math.Pow((math.Pow(float64(c1.B)/255, 2.2)*(1-frac) + math.Pow(float64(c2.B)/255, 2.2)*frac), 1/2.2) * 255)
+			color.R = r
+			color.G = g
+			color.B = b
+			color.A = 255
+		}
+		
+		// Apply subtle atmospheric perspective
+		brightness := 1.0 - 0.15*math.Pow(progress, 2.0)
+		color.R = uint8(float64(color.R) * brightness)
+		color.G = uint8(float64(color.G) * brightness)
+		color.B = uint8(float64(color.B) * brightness)
+		
+		ebitenutil.DrawRect(screen, 0, float64(y), ScreenWidth, 1, color)
 	}
 
-	// Clear the screen
-	screen.Fill(bgColor)
+	// Draw stars during night time
+	if timeOfDay > SunsetStart || timeOfDay < SunriseEnd {
+		// Calculate star visibility
+		starAlpha := 0.0
+		if timeOfDay > SunsetStart && timeOfDay < SunsetEnd {
+			// Fade in during sunset
+			starAlpha = (timeOfDay - SunsetStart) / (SunsetEnd - SunsetStart)
+		} else if timeOfDay > SunsetEnd || timeOfDay < SunriseStart {
+			// Full visibility during night
+			starAlpha = 1.0
+		} else if timeOfDay < SunriseEnd {
+			// Fade out during sunrise
+			starAlpha = 1.0 - (timeOfDay / SunriseEnd)
+		}
 
-	// Draw clouds
+		// Draw stars with twinkling effect
+		for _, star := range g.stars {
+			// Calculate star position with parallax
+			starX := math.Mod(star.x - g.camera*0.05, float64(ScreenWidth))
+			if starX < 0 {
+				starX += float64(ScreenWidth)
+			}
+
+			// Add twinkling effect
+			twinkle := 0.7 + 0.3*math.Sin(g.gameTime*2+star.x*0.1)
+			
+			// Calculate final brightness
+			brightness := star.brightness * twinkle * starAlpha
+			
+			// Draw star as a small white dot
+			starColor := color.RGBA{
+				R: uint8(255 * brightness),
+				G: uint8(255 * brightness),
+				B: uint8(255 * brightness),
+				A: uint8(255 * brightness),
+			}
+			
+			// Draw star with slight glow effect
+			size := 1.0 + star.brightness*1.0
+			ebitenutil.DrawCircle(screen, starX, star.y, size, starColor)
+			
+			// Add a subtle glow
+			glowColor := color.RGBA{
+				R: uint8(255 * brightness * 0.3),
+				G: uint8(255 * brightness * 0.3),
+				B: uint8(255 * brightness * 0.3),
+				A: uint8(255 * brightness * 0.3),
+			}
+			ebitenutil.DrawCircle(screen, starX, star.y, size*2, glowColor)
+		}
+	}
+
+	// Draw mountain layers
+	for i := len(g.mountainImgs) - 1; i >= 0; i-- {
+		op := &ebiten.DrawImageOptions{}
+		
+		// Calculate parallax offset
+		parallaxOffset := g.camera * float64(i+1) * 0.15
+		
+		// Scale mountains
+		scaleX := float64(ScreenWidth) / 1200.0 * 1.2
+		scaleY := float64(ScreenHeight) / 800.0 * 1.5
+		op.GeoM.Scale(scaleX, scaleY)
+		
+		// Position mountains
+		yOffset := float64(ScreenHeight) * 0.3
+		op.GeoM.Translate(-math.Mod(parallaxOffset, float64(ScreenWidth)), -yOffset)
+		
+		// Apply mountain tint
+		tint := colorSet.mountainTints[i]
+		op.ColorM.Scale(
+			float64(tint.R)/255.0,
+			float64(tint.G)/255.0,
+			float64(tint.B)/255.0,
+			1,
+		)
+		
+		// Draw main layer and tiled copy
+		screen.DrawImage(g.mountainImgs[i], op)
+		op.GeoM.Reset()
+		op.GeoM.Scale(scaleX, scaleY)
+		op.GeoM.Translate(-math.Mod(parallaxOffset, float64(ScreenWidth))+float64(ScreenWidth), -yOffset)
+		screen.DrawImage(g.mountainImgs[i], op)
+	}
+
+	// Draw clouds with adjusted transparency based on time of day
 	for _, c := range g.clouds {
 		op := &ebiten.DrawImageOptions{}
-
-		// Scale cloud based on its size
 		sx := c.Width / CloudWidth
 		sy := c.Height / CloudHeight
 		op.GeoM.Scale(sx, sy)
-
-		// Position cloud
 		op.GeoM.Translate(c.X, c.Y)
 
-		// Adjust cloud color and transparency based on night mode
-		if g.nightMode {
-			op.ColorM.Scale(0.5, 0.5, 0.7, c.Alpha*0.7) // Darker, bluer clouds at night
-		} else {
-			op.ColorM.Scale(1, 1, 1, c.Alpha) // Normal white clouds during day
+		// Adjust cloud visibility based on time of day
+		alpha := c.Alpha
+		if timeOfDay > SunsetStart || timeOfDay < SunriseEnd {
+			alpha *= 0.5 // Less visible clouds during night/twilight
 		}
+		op.ColorM.Scale(1, 1, 1, alpha)
 
 		screen.DrawImage(g.cloudImg, op)
 	}
 
 	// Draw platforms
-	for _, p := range g.platforms {
-		op := &ebiten.DrawImageOptions{}
-		op.GeoM.Translate(p.X, p.Y)
-
-		// Apply night mode color adjustment
-		if g.nightMode {
-			op.ColorM.Scale(0.7, 0.7, 0.9, 1) // Slightly darker, bluer at night
+	for i := range g.platforms {
+		p := &g.platforms[i]  // Get pointer to platform
+		
+		// Skip drawing broken platforms
+		if p.Type == PlatformDisappearing && p.State == PlatformBroken {
+			continue
 		}
+		
+		if p.Type == PlatformSticky {
+			op := &ebiten.DrawImageOptions{}
+			op.GeoM.Translate(p.X, p.Y)
 
-		screen.DrawImage(g.platformImg, op)
+			// Apply night mode color adjustment
+			if g.nightMode {
+				op.ColorM.Scale(0.7, 0.7, 0.9, 1)
+			}
+
+			// Yellow-amber color for sticky platforms
+			op.ColorM.Scale(1.2, 1.0, 0.4, 1)
+			
+			// Add pulsing effect when player is stuck
+			if p == g.stuckToPlatform {
+				pulse := 0.3 + 0.2*math.Sin(g.stuckTimer*6.0)
+				op.ColorM.Scale(1.0+pulse, 1.0+pulse, 0.5+pulse, 1)
+				
+				// Draw "Jump!" text
+				ebitenutil.DebugPrintAt(screen, "Jump!", int(p.X)+20, int(p.Y)-15)
+				
+				// Draw sticky effect particles
+				for i := 0; i < 3; i++ {
+					if rand.Float64() < 0.7 {
+						particleX := p.X + rand.Float64()*PlatformWidth
+						particleY := p.Y + rand.Float64()*PlatformHeight/2
+						particleColor := color.RGBA{255, 220, 100, 180}
+						ebitenutil.DrawCircle(screen, particleX, particleY, 1.5, particleColor)
+					}
+				}
+			}
+
+			screen.DrawImage(g.platformImg, op)
+		} else if p.Type == PlatformDisappearing {
+			op := &ebiten.DrawImageOptions{}
+			op.GeoM.Translate(p.X, p.Y)
+
+			// Apply night mode color adjustment
+			if g.nightMode {
+				op.ColorM.Scale(0.7, 0.7, 0.9, 1)
+			}
+
+			// Red color for disappearing platforms
+			op.ColorM.Scale(1.0, 0.6, 0.6, 1)
+			
+			// Apply cracking animation effect
+			if p.State == PlatformBreaking {
+				// Make platform fade and shake as it breaks
+				breakProgress := 1.0 - (p.BreakTimer / 0.3)
+				op.ColorM.Scale(1, 1, 1, 1.0-breakProgress*0.5)
+				
+				// Add shaking effect
+				shakeX := (rand.Float64()*2 - 1) * breakProgress * 3
+				shakeY := (rand.Float64()*2 - 1) * breakProgress * 2
+				op.GeoM.Translate(shakeX, shakeY)
+				
+				// Draw cracks
+				for i := 0; i < 5; i++ {
+					crackX1 := p.X + rand.Float64()*PlatformWidth
+					crackY1 := p.Y + rand.Float64()*PlatformHeight
+					crackX2 := crackX1 + (rand.Float64()*2-1)*10*breakProgress
+					crackY2 := crackY1 + (rand.Float64()*2-1)*5*breakProgress
+					ebitenutil.DrawLine(screen, crackX1, crackY1, crackX2, crackY2, color.RGBA{80, 80, 80, 200})
+				}
+			}
+
+			screen.DrawImage(g.platformImg, op)
+		} else {
+			// Normal platform drawing
+			op := &ebiten.DrawImageOptions{}
+			op.GeoM.Translate(p.X, p.Y)
+
+			// Apply night mode color adjustment
+			if g.nightMode {
+				op.ColorM.Scale(0.7, 0.7, 0.9, 1)
+			}
+
+			screen.DrawImage(g.platformImg, op)
+		}
 	}
 	
 	// Draw boosts
@@ -892,7 +1493,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	
 	// Controls info at bottom
 	ebitenutil.DebugPrintAt(screen, "Left/Right: Move, F: Fly, Space: Shoot", 5, ScreenHeight-35)
-	ebitenutil.DebugPrintAt(screen, "N: Toggle Night, W: Toggle Weather", 5, ScreenHeight-20)
+	ebitenutil.DebugPrintAt(screen, "W: Toggle Weather", 5, ScreenHeight-20)
 
 	// Draw game over message
 	if g.gameOver {
@@ -904,9 +1505,135 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			ScreenHeight/2,
 		)
 	}
+
+	// Draw help text at the bottom
+	ebitenutil.DebugPrintAt(screen, "Press UP/W or SPACE to release from sticky platforms!", 5, ScreenHeight-50)
 }
 
 // Layout implements ebiten.Game interface
 func (g *Game) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return ScreenWidth, ScreenHeight
+}
+
+// lerpColor interpolates between two colors
+func lerpColor(c1, c2 color.RGBA, t float64) color.RGBA {
+	return color.RGBA{
+		R: uint8(float64(c1.R) + t*float64(c2.R-c1.R)),
+		G: uint8(float64(c1.G) + t*float64(c2.G-c1.G)),
+		B: uint8(float64(c1.B) + t*float64(c2.B-c1.B)),
+		A: uint8(float64(c1.A) + t*float64(c2.A-c1.A)),
+	}
+}
+
+// bezierPoint calculates a point on a Bézier curve
+func bezierPoint(points []struct{ X, Y float64 }, t float64) (float64, float64) {
+	n := len(points) - 1
+	x, y := 0.0, 0.0
+	
+	for i := 0; i <= n; i++ {
+		b := bernstein(n, i, t)
+		x += points[i].X * b
+		y += points[i].Y * b
+	}
+	
+	return x, y
+}
+
+// bernstein calculates the Bernstein polynomial
+func bernstein(n, i int, t float64) float64 {
+	return float64(combination(n, i)) * math.Pow(t, float64(i)) * math.Pow(1-t, float64(n-i))
+}
+
+// combination calculates the binomial coefficient
+func combination(n, k int) int {
+	if k == 0 || k == n {
+		return 1
+	}
+	if k > n {
+		return 0
+	}
+	return combination(n-1, k-1) + combination(n-1, k)
+}
+
+// adjustColorBrightness adjusts the brightness of a color by a factor
+func adjustColorBrightness(c color.RGBA, factor float64) color.RGBA {
+	adjust := func(v uint8) uint8 {
+		f := float64(v) * (1 + factor)
+		if f < 0 {
+			f = 0
+		} else if f > 255 {
+			f = 255
+		}
+		return uint8(f)
+	}
+	
+	return color.RGBA{
+		R: adjust(c.R),
+		G: adjust(c.G),
+		B: adjust(c.B),
+		A: c.A,
+	}
+}
+
+// Update mountainGradient for better performance
+func mountainGradient(baseColor color.RGBA, skyBottom color.RGBA, height, maxHeight, timeOfDay float64) color.RGBA {
+	// Calculate snow line based on height
+	snowLine := maxHeight * 0.75
+	snowAmount := math.Max(0, (height-snowLine)/(maxHeight-snowLine))
+	
+	// Adjust colors based on time of day (simplified calculation)
+	sunlightFactor := 0.0
+	if timeOfDay >= DayStart && timeOfDay <= DayEnd {
+		sunlightFactor = 1.0
+	} else if timeOfDay < DayStart {
+		sunlightFactor = (timeOfDay - SunriseStart) / (DayStart - SunriseStart)
+	} else if timeOfDay > DayEnd {
+		sunlightFactor = 1.0 - (timeOfDay - DayEnd) / (SunsetStart - DayEnd)
+	}
+	
+	// Use pre-calculated mountain colors
+	mountainColors := []color.RGBA{
+		{85, 85, 85, 255},    // Slate gray
+		{102, 92, 84, 255},   // Warm gray
+		{112, 128, 144, 255}, // Slate blue
+	}
+	
+	// Get base mountain color (reduced random calls)
+	baseColor = mountainColors[int(height/100)%len(mountainColors)]
+	
+	// Simplified color calculations
+	heightFactor := height / maxHeight * 0.2
+	r := uint8(float64(baseColor.R) * (1 + heightFactor))
+	g := uint8(float64(baseColor.G) * (1 + heightFactor))
+	b := uint8(float64(baseColor.B) * (1 + heightFactor))
+	
+	// Add snow effect
+	if snowAmount > 0 {
+		r = uint8(float64(r)*(1-snowAmount) + 245*snowAmount)
+		g = uint8(float64(g)*(1-snowAmount) + 245*snowAmount)
+		b = uint8(float64(b)*(1-snowAmount) + 250*snowAmount)
+	}
+	
+	// Add sunlight (simplified)
+	if sunlightFactor > 0 {
+		sunFactor := sunlightFactor * 0.2
+		r = uint8(math.Min(255, float64(r)*(1+sunFactor)))
+		g = uint8(math.Min(255, float64(g)*(1+sunFactor)))
+		b = uint8(math.Min(255, float64(b)*(1+sunFactor)))
+	}
+	
+	return color.RGBA{r, g, b, 255}
+}
+
+// Add smoothstep function for better interpolation
+func smoothstep(x float64) float64 {
+	// Clamp between 0 and 1
+	if x < 0 {
+		x = 0
+	}
+	if x > 1 {
+		x = 1
+	}
+	// Smooth interpolation curve
+	return x * x * (3 - 2*x)
 }
