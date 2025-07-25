@@ -50,5 +50,5 @@ go build
 
 ## Requirements
 
-- Go 1.17 or higher
+- 🔧 Go 1.17 or higher
 - Ebitengine library (installed automatically with go mod tidy)
