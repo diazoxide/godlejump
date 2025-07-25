@@ -52,3 +52,7 @@ go build
 
 - 🔧 Go 1.17 or higher
 - Ebitengine library (installed automatically with go mod tidy)
+
+## Additional Documentation
+
+- [ggg.md](ggg.md) - A special GGG file containing game-related emojis and information 🎮🚀✨
