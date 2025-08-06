@@ -1,17 +1,23 @@
 # GodleJump
 
-A simple Doodle Jump style game written in Go using the [Ebitengine](https://ebitengine.org/) 2D game library.
+[![Go Version](https://img.shields.io/badge/Go-1.21%2B-blue.svg)](https://golang.org/doc/devel/release.html)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+A simple Doodle Jump-style endless jumping game written in Go using the [Ebitengine](https://ebitengine.org/) 2D game library. Inspired by the classic mobile game, this implementation features modern visual effects and smooth gameplay.
 
 ## Features
 
-- **Character Movement**: Sprite character that changes direction based on movement
-- **Platform Jumping**: Jump on platforms to climb higher and increase your score
-- **Obstacles**: Avoid bird enemies that move horizontally across the screen
-- **Dynamic Environment**: 
-  - Day/night cycle that automatically changes the game's appearance
-  - Weather system with clear, rain, and snow conditions
-  - Floating clouds with varying sizes and transparency
-- **Game Mechanics**: Score tracking and game over state with restart functionality
+- **Smooth Character Movement**: Sprite character with directional animations
+- **Endless Platforming**: Jump on dynamically generated platforms to climb higher
+- **Bird Obstacles**: Avoid moving bird enemies that patrol horizontally
+- **Dynamic Visual Effects**: 
+  - Automatic day/night cycle with smooth color transitions
+  - Weather system supporting clear, rain, and snow conditions
+  - Animated floating clouds with varying opacity
+- **Game Mechanics**: 
+  - Real-time score tracking based on height achieved
+  - Game over detection with instant restart capability
+  - Responsive controls with keyboard input
 
 ## Controls
 
@@ -19,64 +25,100 @@ A simple Doodle Jump style game written in Go using the [Ebitengine](https://ebi
 |-----|---------|
 | `←` / `A` | Move left |
 | `→` / `D` | Move right |
-| `N` | Toggle night mode manually |
-| `W` | Cycle through weather types (Clear, Rain, Snow) |
+| `N` | Manually toggle night mode |
+| `W` | Cycle weather (Clear → Rain → Snow) |
 | `Space` | Restart after game over |
 
 ## How to Play
 
-1. Control the green character to jump on platforms and climb higher
-2. Avoid the bird obstacles or you'll lose the game
-3. If you fall below the screen, the game ends
-4. Your score increases as you climb higher
-5. Press `Space` to restart after game over
+1. **Objective**: Control your character to jump on platforms and climb as high as possible
+2. **Movement**: Use arrow keys or WASD to move left and right
+3. **Avoid Obstacles**: Don't touch the bird enemies or you'll lose
+4. **Scoring**: Your score increases based on the maximum height reached
+5. **Game Over**: Falls below the screen boundary end the game
+6. **Restart**: Press `Space` to immediately start a new game
 
-## Installation and Setup
+## Requirements
 
-### Prerequisites
+- **Go**: Version 1.21 or higher
+- **Operating System**: Windows, macOS, or Linux
+- **Graphics**: OpenGL 2.1 compatible graphics card
 
-- Go 1.23.2 or higher
-- Git (for cloning the repository)
+## Installation
 
-### Installation
+### Method 1: Clone and Build
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/diazoxide/godlejump.git
-   cd godlejump
-   ```
-
-2. Download dependencies:
-   ```bash
-   go mod tidy
-   ```
-
-3. Build the game:
-   ```bash
-   go build -o godlejump
-   ```
-
-4. Run the game:
-   ```bash
-   ./godlejump
-   ```
-
-### Quick Start
-
-For a one-liner to run the game directly:
 ```bash
-go run main.go
+# Clone the repository
+git clone https://github.com/diazoxide/godlejump.git
+cd godlejump
+
+# Download dependencies
+go mod tidy
+
+# Build the executable
+go build -o doodlejump .
+
+# Run the game
+./doodlejump
+```
+
+### Method 2: Direct Run
+
+```bash
+# Run directly without building
+go run .
+```
+
+### Method 3: Install Globally
+
+```bash
+# Install to your GOPATH/bin
+go install github.com/diazoxide/godlejump@latest
+
+# Run from anywhere (ensure GOPATH/bin is in PATH)
+doodlejump
 ```
 
 ## Visual Effects
 
-- **Day/Night Cycle**: Automatically cycles between day and night modes, changing background colors and adjusting brightness of all game elements
-- **Weather System**: 
-  - **Clear**: Standard gameplay with no precipitation
-  - **Rain**: Blue raindrops fall from the sky
-  - **Snow**: White snowflakes drift down slowly
-- **Dynamic Clouds**: Clouds with varying sizes and transparency float across the sky
+### Day/Night Cycle
+The game automatically transitions between day and night modes, creating a dynamic atmosphere with:
+- Gradual background color changes
+- Adjusted brightness for all game elements
+- Smooth transitions that don't disrupt gameplay
+
+### Weather System
+Three distinct weather conditions enhance the visual experience:
+- **Clear**: Standard sunny/clear conditions
+- **Rain**: Animated blue raindrops falling from the sky
+- **Snow**: Gentle white snowflakes drifting downward
+
+### Environmental Elements
+- **Clouds**: Multi-layered cloud system with varying sizes and transparency
+- **Mountains**: Parallax scrolling background mountains for depth
+- **Platforms**: Randomly generated platforms with consistent spacing
+
+## Project Structure
+
+```
+godlejump/
+├── main.go          # Entry point and window setup
+├── game/            # Core game logic
+│   ├── game.go      # Main game loop and rendering
+│   ├── assets/      # Game assets (sprites, textures)
+│   └── player.go    # Player character logic
+├── go.mod           # Go module definition
+├── go.sum           # Dependency checksums
+└── LICENSE          # Apache 2.0 license
+```
 
 ## License
 
-This project is available under the terms specified in the [LICENSE](LICENSE) file.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- Built with [Ebitengine](https://ebitengine.org/), a 2D game engine for Go
+- Inspired by the original Doodle Jump mobile game
+- Graphics and sprites created specifically for this project
